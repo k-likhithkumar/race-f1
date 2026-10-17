@@ -1,0 +1,18 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data caches (raw FastF1 cache, raw OpenF1 cache, and local processed Parquet cache)
+data/raw_fastf1/
+data/raw_openf1/
+data/cache/
+*.parquet
+
+# Testing & environments
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
