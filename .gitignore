@@ -9,6 +9,9 @@ data/raw_openf1/
 data/cache/
 *.parquet
 
+# Generated diagnostic and benchmark outputs
+data/*_diag_results.json
+
 # Testing & environments
 .pytest_cache/
 .coverage
