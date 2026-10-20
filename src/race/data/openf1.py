@@ -440,7 +440,7 @@ def get_openf1_laps(
                 session_time_s = round((lap_end_dt - session_start_dt).total_seconds(), 3)
             else:
                 lap_end_dt = None
-                session_time_s = round((lap_start_dt - session_start_dt).total_seconds(), 3)
+                session_time_s = np.nan
         else:
             lap_start_dt = None
             lap_end_dt = None
@@ -500,9 +500,11 @@ def get_openf1_laps(
     if df.empty:
         return df
 
-    # Order positions per lap by session_time_s
+    # Order positions per lap by session_time_s only for completed laps
     for lap_n, group in df.groupby("lap_number"):
-        sorted_indices = group.sort_values(by="session_time_s").index
+        completed_mask = group["lap_time_s"].notna() & (group["lap_time_s"] > 0) & group["session_time_s"].notna()
+        completed_group = group[completed_mask]
+        sorted_indices = completed_group.sort_values(by="session_time_s").index
         df.loc[sorted_indices, "position"] = range(1, len(sorted_indices) + 1)
 
     # Cast integer columns to int32 for exact schema parity with FastF1 processor
@@ -539,7 +541,7 @@ def get_openf1_weather(session_key: int, session_start_dt: pd.Timestamp) -> pd.D
             "track_temp_c": track_temp,
             "humidity_pct": hum,
             "rainfall": bool(row.get("rainfall", 0) == 1),
-            "track_status": "1",
+            "track_status": "UNKNOWN",
         })
 
     df = pd.DataFrame(records)
@@ -615,6 +617,10 @@ def get_openf1_positions(
                     mask_inactive = (grid_times < t_start_active) | (grid_times > t_end_active)
                     interp_x[mask_inactive] = np.nan
                     interp_y[mask_inactive] = np.nan
+                else:
+                    # No completed laps in session (e.g. DNS or Lap 1 retirement before crossing line)
+                    interp_x[:] = np.nan
+                    interp_y[:] = np.nan
 
         drv_resampled = pd.DataFrame({
             "session_time_s": np.round(grid_times, 3),
@@ -812,7 +818,9 @@ def cache_race_openf1(year: int, gp: str, session_type: str = "Race", round_num:
         json.dump(track_outline, f, indent=2)
 
     # 8. Metadata
-    total_laps = int(laps_df["lap_number"].max()) if not laps_df.empty else 0
+    completed_laps = laps_df.dropna(subset=["lap_time_s", "session_time_s", "position"])
+    completed_laps = completed_laps[completed_laps["lap_time_s"] > 0]
+    total_laps = int(completed_laps["lap_number"].max()) if not completed_laps.empty else (int(laps_df["lap_number"].max()) if not laps_df.empty else 0)
     winner_code = classification_df.iloc[0]["driver"] if not classification_df.empty else "UNKNOWN"
     metadata = {
         "year": year,

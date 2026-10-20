@@ -68,20 +68,44 @@ def compute_tyre_degradation(
 
     # If fewer than 4 clean laps, slope is statistically unreliable
     if clean_count < 4:
+        # Build laps list for available laps even with insufficient data
+        laps_list = []
+        for _, row in drv_laps.sort_values("lap_number").iterrows():
+            ln = int(row["lap_number"])
+            raw_t = round(float(row["lap_time_s"]), 3) if pd.notna(row.get("lap_time_s")) else None
+            age_val = int(row["tyre_age_laps"]) if pd.notna(row.get("tyre_age_laps")) else None
+            is_clean_val = bool(row.get("is_clean", False)) and raw_t is not None
+            laps_list.append({
+                "lap_number": ln,
+                "tyre_age_laps": age_val,
+                "raw_lap_time_s": raw_t,
+                "fuel_corrected_lap_time_s": None,
+                "fitted_lap_time_s": None,
+                "is_clean": is_clean_val,
+                "is_cliff": False,
+            })
+
         return {
             "driver": driver,
             "stint": stint,
             "compound": compound,
             "is_estimate": True,
             "fuel_correction_applied_s_per_lap": fuel_correction_s_per_lap,
+            "fuel_correction_assumption": f"Linear fuel burn compensation of {fuel_correction_s_per_lap:.3f} s/lap.",
+            "methodology_note": "Degradation rate is an ordinary least squares (OLS) linear regression model estimate on clean green-flag laps, not a direct physical tyre compound wear measurement.",
+            "degradation_interpretation": "Insufficient clean laps to estimate degradation slope.",
             "raw_slope_s_per_lap": None,
             "estimated_deg_rate_s_per_lap": None,
+            "intercept_corr_s": None,
+            "intercept_raw_s": None,
             "clean_laps_count": clean_count,
+            "total_laps_count": len(drv_laps),
             "r_squared": None,
             "std_error_s_per_lap": None,
             "p_value": None,
             "cliff_lap": None,
             "confidence": "INSUFFICIENT_DATA",
+            "laps": laps_list,
             "message": f"Stint has only {clean_count} clean laps (minimum 4 required for reliable estimation).",
         }
 
@@ -95,7 +119,7 @@ def compute_tyre_degradation(
 
     # Fit OLS regression
     slope_corr, intercept_corr, r_val, p_val, std_err = stats.linregress(rel_laps, corr_times)
-    slope_raw, _, _, _, _ = stats.linregress(rel_laps, raw_times)
+    slope_raw, intercept_raw, _, _, _ = stats.linregress(rel_laps, raw_times)
 
     # Detect tyre cliff
     # Residuals from linear fit: epsilon = t_corr - (intercept + slope * rel_laps)
@@ -117,20 +141,82 @@ def compute_tyre_degradation(
     else:
         confidence = "MEDIUM"
 
+    # Build per-lap details for all laps in stint up to boundary
+    clean_lap_dict = {}
+    for idx_rel, (l_num, corr_t) in enumerate(zip(lap_nums, corr_times)):
+        fit_t = intercept_corr + slope_corr * (idx_rel + 1)
+        is_c = bool(cliff_lap is not None and int(l_num) == cliff_lap)
+        clean_lap_dict[int(l_num)] = {
+            "fuel_corrected_lap_time_s": round(float(corr_t), 3),
+            "fitted_lap_time_s": round(float(fit_t), 3),
+            "is_cliff": is_c,
+        }
+
+    laps_list = []
+    for _, row in drv_laps.sort_values("lap_number").iterrows():
+        ln = int(row["lap_number"])
+        raw_t = round(float(row["lap_time_s"]), 3) if pd.notna(row.get("lap_time_s")) else None
+        age_val = int(row["tyre_age_laps"]) if pd.notna(row.get("tyre_age_laps")) else None
+        is_clean_val = bool(row.get("is_clean", False)) and raw_t is not None
+
+        if ln in clean_lap_dict:
+            laps_list.append({
+                "lap_number": ln,
+                "tyre_age_laps": age_val,
+                "raw_lap_time_s": raw_t,
+                "fuel_corrected_lap_time_s": clean_lap_dict[ln]["fuel_corrected_lap_time_s"],
+                "fitted_lap_time_s": clean_lap_dict[ln]["fitted_lap_time_s"],
+                "is_clean": True,
+                "is_cliff": clean_lap_dict[ln]["is_cliff"],
+            })
+        else:
+            laps_list.append({
+                "lap_number": ln,
+                "tyre_age_laps": age_val,
+                "raw_lap_time_s": raw_t,
+                "fuel_corrected_lap_time_s": None,
+                "fitted_lap_time_s": None,
+                "is_clean": is_clean_val,
+                "is_cliff": False,
+            })
+
+    # Methodological explanations and cautious interpretation
+    fuel_assumption = (
+        f"Linear fuel burn compensation of {fuel_correction_s_per_lap:.3f} s/lap applied. "
+        "Raw lap times naturally decrease as fuel burns; positive fuel-corrected slope reflects pace loss."
+    )
+    methodology_note = (
+        "Degradation rate is an ordinary least squares (OLS) linear regression model estimate on clean green-flag laps, "
+        "not a direct physical tyre compound wear measurement."
+    )
+    if slope_corr > 0.05 and (r_val**2 > 0.3 or std_err < 0.05):
+        interpretation = "Pace degradation is statistically observable and consistent with tyre performance decline."
+    elif slope_corr > 0.0:
+        interpretation = "Mild pace degradation observed, but high variance suggests traffic, lift-and-coast, or tyre management."
+    else:
+        interpretation = "Lap times remained stable or improved over the stint; no measurable thermal degradation detected (tyre saving or track evolution dominant)."
+
     return {
         "driver": driver,
         "stint": stint,
         "compound": compound,
         "is_estimate": True,
         "fuel_correction_applied_s_per_lap": fuel_correction_s_per_lap,
+        "fuel_correction_assumption": fuel_assumption,
+        "methodology_note": methodology_note,
+        "degradation_interpretation": interpretation,
         "raw_slope_s_per_lap": round(float(slope_raw), 4),
         "estimated_deg_rate_s_per_lap": round(float(slope_corr), 4),
+        "intercept_corr_s": round(float(intercept_corr), 3),
+        "intercept_raw_s": round(float(intercept_raw), 3),
         "clean_laps_count": clean_count,
+        "total_laps_count": len(drv_laps),
         "r_squared": round(float(r_val**2), 3),
         "std_error_s_per_lap": round(float(std_err), 4),
         "p_value": round(float(p_val), 4),
         "cliff_lap": cliff_lap,
         "confidence": confidence,
+        "laps": laps_list,
     }
 
 
@@ -141,12 +227,19 @@ def _empty_degradation_result(driver: str, stint: int) -> Dict[str, Any]:
         "compound": "UNKNOWN",
         "is_estimate": True,
         "fuel_correction_applied_s_per_lap": FUEL_CORRECTION_S_PER_LAP,
+        "fuel_correction_assumption": f"Linear fuel burn compensation of {FUEL_CORRECTION_S_PER_LAP:.3f} s/lap.",
+        "methodology_note": "Degradation rate is an ordinary least squares (OLS) linear regression model estimate on clean green-flag laps, not a direct physical tyre compound wear measurement.",
+        "degradation_interpretation": "No data available for this stint.",
         "raw_slope_s_per_lap": None,
         "estimated_deg_rate_s_per_lap": None,
+        "intercept_corr_s": None,
+        "intercept_raw_s": None,
         "clean_laps_count": 0,
+        "total_laps_count": 0,
         "r_squared": None,
         "std_error_s_per_lap": None,
         "p_value": None,
         "cliff_lap": None,
         "confidence": "INSUFFICIENT_DATA",
+        "laps": [],
     }

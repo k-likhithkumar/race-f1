@@ -19,3 +19,19 @@ htmlcov/
 .venv/
 venv/
 ENV/
+.playwright/
+
+# Node / Frontend build artifacts
+node_modules/
+ui/node_modules/
+dist/
+ui/dist/
+
+# Scratch & temporary files
+scratch/
+*.log
+
+# Environment configuration and secrets
+.env
+.env.*
+!.env.example

@@ -7,7 +7,7 @@ without initiating network requests.
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # In-memory session cache for fast repeated lap lookups
 _SESSION_CACHE: Dict[str, Any] = {}
+_LAP_TELEMETRY_CACHE: Dict[Tuple[int, str, str, int], pd.DataFrame] = {}
 
 
 def _get_cached_fastf1_session(year: int, gp: str, session_type: str = "R") -> Any:
@@ -54,6 +55,10 @@ def load_lap_telemetry(
     - channels_available: List[str]
     - channels_unavailable: List[str]
     """
+    cache_key = (year, gp.lower(), driver.upper(), lap_number)
+    if cache_key in _LAP_TELEMETRY_CACHE:
+        return _LAP_TELEMETRY_CACHE[cache_key].copy()
+
     cache_dir = get_race_cache_dir(year, gp)
     if not cache_dir.exists():
         raise FileNotFoundError(f"Cache directory not found for race: {year} {gp}")
@@ -82,9 +87,12 @@ def load_lap_telemetry(
         if session_key is None:
             session_key = 9157
 
-        return _load_openf1_lap_telemetry(year, gp, session_key, driver, lap_number, cache_dir)
+        result = _load_openf1_lap_telemetry(year, gp, session_key, driver, lap_number, cache_dir)
     else:
-        return _load_fastf1_lap_telemetry(year, gp, driver, lap_number)
+        result = _load_fastf1_lap_telemetry(year, gp, driver, lap_number)
+
+    _LAP_TELEMETRY_CACHE[cache_key] = result
+    return result.copy()
 
 
 def _load_fastf1_lap_telemetry(

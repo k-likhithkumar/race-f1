@@ -94,8 +94,9 @@ def get_laps(session: fastf1.core.Session) -> pd.DataFrame:
     laps_df["stint"] = pd.to_numeric(laps["Stint"], errors="coerce").fillna(1).astype(int)
     laps_df["position"] = pd.to_numeric(laps["Position"], errors="coerce")
 
-    # Raw TrackStatus preservation as string
-    laps_df["track_status"] = laps["TrackStatus"].fillna("").astype(str)
+    # TrackStatus preservation: map null or empty to UNKNOWN explicitly
+    raw_status = laps["TrackStatus"].fillna("UNKNOWN").astype(str)
+    laps_df["track_status"] = raw_status.apply(lambda s: s.strip() if s.strip() else "UNKNOWN")
 
     # Clean-lap logic per PDF rules:
     # 1. LapTime must be valid and positive
@@ -359,10 +360,11 @@ def get_weather_track_status(session: fastf1.core.Session) -> pd.DataFrame:
             right_on="t",
             direction="backward",
         )
-        weather_df["track_status"] = weather_df["track_status"].fillna("1").astype(str)
+        weather_df["track_status"] = weather_df["track_status"].fillna("UNKNOWN").astype(str)
+        weather_df["track_status"] = weather_df["track_status"].apply(lambda s: s.strip() if s.strip() else "UNKNOWN")
         weather_df = weather_df.drop(columns=["t"])
     else:
-        weather_df["track_status"] = "1"
+        weather_df["track_status"] = "UNKNOWN"
 
     return weather_df.reset_index(drop=True)
 
